@@ -4,7 +4,7 @@ import pytesseract
 import os
 from fpdf import FPDF
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 # Set Tesseract path - update this to match your installation path
@@ -12,8 +12,23 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 
 def preprocess_image(image_path):
     """Load and preprocess the image with improved contrast handling."""
-    # Read the image
-    image = cv2.imread(image_path)
+    # Read the image using PIL first to handle different formats better
+    try:
+        pil_image = Image.open(image_path)
+        # Convert PIL image to OpenCV format
+        if pil_image.mode == 'RGBA':
+            # Handle PNG with alpha channel
+            pil_image = pil_image.convert('RGB')
+        
+        image = np.array(pil_image)
+        # Convert RGB to BGR (OpenCV format)
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        print(f"PIL failed to open image: {str(e)}")
+        # Fallback to direct OpenCV reading
+        image = cv2.imread(image_path)
+    
     if image is None:
         raise ValueError(f"Could not read image at {image_path}")
     
@@ -88,6 +103,10 @@ def warp_perspective(image, contour):
     heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
     maxHeight = max(int(heightA), int(heightB))
     
+    # Ensure dimensions are not zero
+    maxWidth = max(maxWidth, 1)
+    maxHeight = max(maxHeight, 1)
+    
     # Define destination points
     dst = np.array([
         [0, 0],
@@ -131,7 +150,11 @@ def enhance_for_ocr(image):
 def extract_text_from_image(image, lang='eng'):
     """Extract text from the processed image using Tesseract OCR with optimized config."""
     config = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
-    text = pytesseract.image_to_string(image, lang=lang, config=config)
+    
+    # Convert OpenCV image to PIL format for Tesseract
+    pil_image = Image.fromarray(image)
+    
+    text = pytesseract.image_to_string(pil_image, lang=lang, config=config)
     return text
 
 def save_text_as_pdf(text, output_pdf):
@@ -191,133 +214,154 @@ class DocumentScannerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Document Scanner with OCR")
-        # Increase the window size for larger image display
         self.root.geometry("1000x900")
+        self.root.configure(bg="#f5f5f5")  # Light gray background
         
-        # Main frame
-        main_frame = tk.Frame(root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Set style for ttk widgets
+        self.style = ttk.Style()
+        self.style.configure("TFrame", background="#f5f5f5")
+        self.style.configure("TLabel", background="#f5f5f5", font=("Segoe UI", 10))
+        self.style.configure("TButton", font=("Segoe UI", 10))
+        self.style.configure("Heading.TLabel", font=("Segoe UI", 12, "bold"))
         
-        # Top controls frame
-        controls_frame = tk.Frame(main_frame)
-        controls_frame.pack(fill=tk.X, pady=10)
+        # Main frame with padding
+        main_frame = ttk.Frame(root, padding="20 20 20 20", style="TFrame")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Top section - Header
+        header_frame = ttk.Frame(main_frame, style="TFrame")
+        header_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        header_label = ttk.Label(header_frame, text="Document Scanner with OCR", 
+                                font=("Segoe UI", 16, "bold"), style="TLabel")
+        header_label.pack(side=tk.LEFT)
+        
+        # Control panel frame
+        control_frame = ttk.Frame(main_frame, style="TFrame")
+        control_frame.pack(fill=tk.X, pady=(0, 15))
         
         # Upload button
-        self.upload_btn = tk.Button(
-            controls_frame, 
-            text="Upload Document", 
-            command=self.upload_and_scan, 
-            font=("Arial", 14),
-            bg="#4CAF50",
-            fg="white",
-            padx=10
+        self.upload_btn = ttk.Button(
+            control_frame, 
+            text="Upload Document",
+            command=self.upload_and_scan,
+            style="TButton"
         )
-        self.upload_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.upload_btn.pack(side=tk.LEFT, padx=(0, 15))
         
         # Language selection
-        lang_frame = tk.Frame(controls_frame)
-        lang_frame.pack(side=tk.LEFT)
-        
-        lang_label = tk.Label(lang_frame, text="OCR Language:", font=("Arial", 12))
+        lang_label = ttk.Label(control_frame, text="OCR Language:", style="TLabel")
         lang_label.pack(side=tk.LEFT, padx=(0, 5))
         
         self.lang_var = tk.StringVar(value="eng")
-        self.lang_dropdown = tk.OptionMenu(
-            lang_frame, 
-            self.lang_var, 
-            "eng", "spa", "fra", "deu", "ita", "chi_sim", "rus"
+        languages = {"eng": "English", "spa": "Spanish", "fra": "French", 
+                    "deu": "German", "ita": "Italian", "chi_sim": "Chinese", "rus": "Russian"}
+        
+        self.lang_dropdown = ttk.Combobox(
+            control_frame,
+            textvariable=self.lang_var,
+            values=list(languages.keys()),
+            state="readonly",
+            width=10
         )
-        self.lang_dropdown.config(font=("Arial", 12))
         self.lang_dropdown.pack(side=tk.LEFT)
         
-        # Status label
+        # Status indicator
         self.status_var = tk.StringVar(value="Ready to scan")
-        self.status_label = tk.Label(
-            main_frame, 
+        status_frame = ttk.Frame(main_frame, style="TFrame")
+        status_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        status_label = ttk.Label(status_frame, text="Status:", style="TLabel")
+        status_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.status_indicator = ttk.Label(
+            status_frame,
             textvariable=self.status_var,
-            font=("Arial", 12),
-            fg="#555555"
+            style="TLabel"
         )
-        self.status_label.pack(pady=(0, 10))
+        self.status_indicator.pack(side=tk.LEFT)
         
-        # Image display frame - increase the height for larger images
-        self.image_frame = tk.Frame(main_frame, bd=2, relief=tk.GROOVE)
-        self.image_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        # Image display section
+        image_section = ttk.Frame(main_frame, style="TFrame")
+        image_section.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
-        # Original and processed image labels
-        self.images_row = tk.Frame(self.image_frame)
-        self.images_row.pack(fill=tk.BOTH, expand=True)
+        # Two columns for images
+        left_col = ttk.Frame(image_section, style="TFrame")
+        left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         
-        # Original image - increase size
-        self.orig_col = tk.Frame(self.images_row)
-        self.orig_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        right_col = ttk.Frame(image_section, style="TFrame")
+        right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        tk.Label(self.orig_col, text="Original Image", font=("Arial", 12, "bold")).pack(pady=(0, 5))
+        # Original image
+        orig_header = ttk.Label(left_col, text="Original Image", style="Heading.TLabel")
+        orig_header.pack(anchor=tk.W, pady=(0, 5))
         
-        # Create a larger frame for the original image
-        self.orig_image_frame = tk.Frame(self.orig_col, height=400, width=450)
+        self.orig_image_frame = ttk.Frame(left_col, borderwidth=1, relief="solid", height=350)
         self.orig_image_frame.pack(fill=tk.BOTH, expand=True)
-        self.orig_image_frame.pack_propagate(False)  # Prevent frame from shrinking
+        self.orig_image_frame.pack_propagate(False)
         
-        self.orig_image_label = tk.Label(self.orig_image_frame, bg="#f0f0f0")
+        self.orig_image_label = ttk.Label(self.orig_image_frame)
         self.orig_image_label.pack(fill=tk.BOTH, expand=True)
         
-        # Processed image - increase size
-        self.proc_col = tk.Frame(self.images_row)
-        self.proc_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        # Processed image
+        proc_header = ttk.Label(right_col, text="Processed Image", style="Heading.TLabel")
+        proc_header.pack(anchor=tk.W, pady=(0, 5))
         
-        tk.Label(self.proc_col, text="Processed Image", font=("Arial", 12, "bold")).pack(pady=(0, 5))
-        
-        # Create a larger frame for the processed image
-        self.proc_image_frame = tk.Frame(self.proc_col, height=400, width=450)
+        self.proc_image_frame = ttk.Frame(right_col, borderwidth=1, relief="solid", height=350)
         self.proc_image_frame.pack(fill=tk.BOTH, expand=True)
-        self.proc_image_frame.pack_propagate(False)  # Prevent frame from shrinking
+        self.proc_image_frame.pack_propagate(False)
         
-        self.proc_image_label = tk.Label(self.proc_image_frame, bg="#f0f0f0")
+        self.proc_image_label = ttk.Label(self.proc_image_frame)
         self.proc_image_label.pack(fill=tk.BOTH, expand=True)
         
-        # Text output area
-        tk.Label(main_frame, text="Extracted Text", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 5))
+        # Text output section
+        text_section = ttk.Frame(main_frame, style="TFrame")
+        text_section.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
-        text_frame = tk.Frame(main_frame, bd=2, relief=tk.GROOVE)
-        text_frame.pack(fill=tk.BOTH, expand=True)
+        text_header = ttk.Label(text_section, text="Extracted Text", style="Heading.TLabel")
+        text_header.pack(anchor=tk.W, pady=(0, 5))
         
-        self.text_output = tk.Text(text_frame, wrap=tk.WORD, height=15, width=80, font=("Courier", 11))
+        # Text area with scrollbar
+        text_container = ttk.Frame(text_section, borderwidth=1, relief="solid")
+        text_container.pack(fill=tk.BOTH, expand=True)
+        
+        self.text_output = tk.Text(
+            text_container,
+            wrap=tk.WORD,
+            font=("Consolas", 10),
+            padx=10,
+            pady=10,
+            bg="white"
+        )
         self.text_output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        text_scrollbar = tk.Scrollbar(text_frame, command=self.text_output.yview)
+        text_scrollbar = ttk.Scrollbar(text_container, command=self.text_output.yview)
         text_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.text_output.config(yscrollcommand=text_scrollbar.set)
         
-        # Save buttons frame
-        save_frame = tk.Frame(main_frame)
-        save_frame.pack(fill=tk.X, pady=10)
+        # Action buttons frame
+        button_frame = ttk.Frame(main_frame, style="TFrame")
+        button_frame.pack(fill=tk.X, pady=(0, 10))
         
-        self.save_text_btn = tk.Button(
-            save_frame, 
-            text="Save Text", 
+        self.save_text_btn = ttk.Button(
+            button_frame,
+            text="Save as Text",
             command=self.save_text_file,
-            font=("Arial", 12),
-            bg="#2196F3",
-            fg="white",
-            padx=10
+            style="TButton"
         )
         self.save_text_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        self.save_pdf_btn = tk.Button(
-            save_frame, 
-            text="Save PDF", 
+        self.save_pdf_btn = ttk.Button(
+            button_frame,
+            text="Save as PDF",
             command=self.save_pdf_file,
-            font=("Arial", 12),
-            bg="#2196F3",
-            fg="white",
-            padx=10
+            style="TButton"
         )
         self.save_pdf_btn.pack(side=tk.LEFT)
         
         # Disable save buttons initially
-        self.save_text_btn.config(state=tk.DISABLED)
-        self.save_pdf_btn.config(state=tk.DISABLED)
+        self.save_text_btn.state(["disabled"])
+        self.save_pdf_btn.state(["disabled"])
         
         # Store the extracted text
         self.extracted_text = ""
@@ -350,11 +394,22 @@ class DocumentScannerApp:
                 
             # Store extracted text
             self.extracted_text = extracted_text
-                
-            # Display original image
-            orig_img = cv2.imread(file_path)
-            orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
-            self.display_image(orig_img, self.orig_image_label)
+            
+            # Display original image using PIL instead of OpenCV for better format support
+            try:
+                # Use PIL to open the image
+                orig_img = Image.open(file_path)
+                # Convert to RGB if needed (for PNGs with transparency)
+                if orig_img.mode == 'RGBA':
+                    orig_img = orig_img.convert('RGB')
+                # Convert to numpy array for our display function
+                orig_img_array = np.array(orig_img)
+                # Display the image
+                self.display_image(orig_img_array, self.orig_image_label)
+            except Exception as e:
+                print(f"Error displaying original image: {str(e)}")
+                # Fallback to displaying the processed image if we can't display original
+                self.display_image(scanned, self.orig_image_label)
             
             # Display processed image
             self.display_image(ocr_ready, self.proc_image_label)
@@ -364,14 +419,15 @@ class DocumentScannerApp:
             self.text_output.insert(tk.END, extracted_text)
             
             # Enable save buttons
-            self.save_text_btn.config(state=tk.NORMAL)
-            self.save_pdf_btn.config(state=tk.NORMAL)
+            self.save_text_btn.state(["!disabled"])
+            self.save_pdf_btn.state(["!disabled"])
             
             self.status_var.set("Document processed successfully")
             
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             self.status_var.set("Error occurred during processing")
+            print(f"Detailed error: {str(e)}")
     
     def display_image(self, img, label):
         """Display an image on the specified label with proper scaling and maintain aspect ratio."""
@@ -401,52 +457,4 @@ class DocumentScannerApp:
         # Resize image
         resized = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
         
-        # Convert to PIL format
-        if len(resized.shape) == 2:  # Grayscale
-            pil_img = Image.fromarray(resized)
-        else:  # Color
-            pil_img = Image.fromarray(resized)
-        
-        # Convert to Tkinter format
-        tk_img = ImageTk.PhotoImage(pil_img)
-        
-        # Update label
-        label.config(image=tk_img)
-        label.image = tk_img  # Keep a reference
-    
-    def save_text_file(self):
-        """Save extracted text to a file."""
-        if not self.extracted_text:
-            messagebox.showerror("Error", "No text to save!")
-            return
-            
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text Files", "*.txt")]
-        )
-        
-        if file_path:
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(self.extracted_text)
-            messagebox.showinfo("Success", f"Text saved to {file_path}")
-    
-    def save_pdf_file(self):
-        """Save extracted text to a PDF file."""
-        if not self.extracted_text:
-            messagebox.showerror("Error", "No text to save!")
-            return
-            
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF Files", "*.pdf")]
-        )
-        
-        if file_path:
-            save_text_as_pdf(self.extracted_text, file_path)
-            messagebox.showinfo("Success", f"PDF saved to {file_path}")
-
-# Main entry point
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = DocumentScannerApp(root)
-    root.mainloop()
+        # 
